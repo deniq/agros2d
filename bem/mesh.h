@@ -88,7 +88,7 @@ public:
     double value(Node p);
     double f() { return m_f; }
     double nodeValues[3];
-    bool containsPoint(Node x);
+    bool containsPoint(Node x);    
     QList<Node *> m_nodes;
     Mesh * m_mesh;
 
@@ -139,9 +139,12 @@ public:
 
     double length() const { return m_length; }
 
+    double parametricCoordinate(Node node);
+
     // ToDo: make it private
     Mesh * m_mesh;
     QList<Node *> m_nodes;
+    QList<Node *> m_points;
 
 
 private:

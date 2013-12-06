@@ -127,6 +127,22 @@ double Segment::distanceOf(Node point)
     return dv.magnitude();
 }
 
+double Segment::parametricCoordinate(Node node)
+{
+
+    double dx = lastNode().x - firstNode().x;
+    double dy = lastNode().y - firstNode().y;
+    double x = node.x - firstNode().x;
+    double y = node.y - firstNode().y;
+
+    if(abs(x) > EPS_ZERO)
+        return 2 * (x / dx) - 1;
+    else
+        if(abs(y) > EPS_ZERO)
+            return 2 * (y / dy) - 1;
+        else
+            return -1;
+}
 
 bool Node::operator !=(const Node &vec) const
 {

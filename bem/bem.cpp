@@ -27,6 +27,7 @@ Bem::Bem(FieldInfo * const fieldInfo, MeshSharedPtr mesh)
 {    
     m_fieldInfo = fieldInfo;
     m_mesh = mesh;
+    m_polyOrder = 0;
 }
 
 
@@ -132,42 +133,58 @@ void Bem::addPhysics()
         mesh.m_segments.append((edgeComponents.at(i)));
     }
 
-    foreach(Segment segment, mesh.m_segments)
+
+    if(m_polyOrder == 1)
     {
-        if (segment.isEssential())
+        for(int i = 0; i < mesh.m_segments.count(); i++)
         {
-            segment.firstNode().isEssential = true;
-            segment.firstNode().value = segment.value();
-            segment.lastNode().isEssential = true;
-            segment.lastNode().value = segment.value();
-        }
-        else
-        {
-            segment.firstNode().normalDerivation = segment.derivation();
-            segment.lastNode().normalDerivation = segment.derivation();
+
+            Segment & segment = mesh.m_segments[i];
+            if (segment.isEssential())
+            {
+                segment.firstNode().isEssential = true;
+                segment.firstNode().value = segment.value();
+                segment.lastNode().isEssential = true;
+                segment.lastNode().value = segment.value();
+            }
+            else
+            {
+                segment.firstNode().normalDerivation = segment.derivation();
+                segment.lastNode().normalDerivation = segment.derivation();
+            }
+
+            mesh.m_nodes.append(&segment.firstNode());
+            mesh.m_nodes.append(&segment.lastNode());
+            segment.m_points.append(&segment.firstNode());
+            segment.m_points.append(&segment.lastNode());
         }
     }
 
-    mesh.m_nodes.clear();
-    foreach(Segment segment, mesh.m_segments)
+
+    if(m_polyOrder == 0)
     {
-        Node * node = new Node(segment.gravity());
-        if (segment.isEssential())
-        {
-            node->isEssential = true;
-            node->value = segment.value();
-        }
-        else
-        {
-            node->normalDerivation = segment.derivation();
-        }
+        mesh.m_nodes.clear();
 
-        mesh.m_nodes.append(node);
-        segment.m_nodes.clear();
-        segment.m_nodes.append(node);
-        qDebug() << "value = " << segment.firstNode().value;
+        for(int i = 0; i < mesh.m_segments.count(); i++)
+        {
+            Segment & segment = mesh.m_segments[i];
+            Node * node = new Node(segment.gravity());
+            if (segment.isEssential())
+            {
+                node->isEssential = true;
+                node->value = segment.value();
+            }
+            else
+            {
+                node->normalDerivation = segment.derivation();
+            }
+
+            node->globalIndex = i;
+
+            mesh.m_nodes.append(node);
+            segment.m_points.append(node);
+        }
     }
-
 }
 
 QString Bem::toString()
@@ -356,8 +373,7 @@ double Bem::kernel_laplace2D_derivation(Node refNode, Segment segment, double xi
 }
 
 void Bem::solve()
-{        
-    int polyOrder = 0;
+{            
     int order = 7;
     int n = mesh.m_segments.count();
 
@@ -370,55 +386,57 @@ void Bem::solve()
     Node node;
     for (int i = 0; i < n; i++)
     {
-        if(polyOrder == 0)
-            node = mesh.m_segments[i].gravity();
-        if(polyOrder == 1)
-            node = * mesh.m_nodes[i];
+        node = * mesh.m_nodes[i];
 
         // Loop over all elements
         for (int j = 0; j < n; j++)
         {
             Segment segment = mesh.m_segments[j];
             // Loop over element nodes
-            for(int k = 0; k <= polyOrder; k++)
+            for(int k = 0; k <= m_polyOrder; k++)
             {
-                int index = segment.m_nodes[k]->globalIndex;
+                int index = segment.m_points[k]->globalIndex;
                 for(int l = 0; l <= order; l++)
                 {
                     double  jac;
-                    jac =jacobian(polyOrder, gaussCoords[order][l], segment);
+                    jac =jacobian(m_polyOrder, gaussCoords[order][l], segment);
                     if(i == index)
                     {
-
                         double xi;
-//                        if(k == 0)
-//                        {
-//                            xi = 2 * gaussLeguerreCoords[order][l] - 1.0;
-//                        }
-//                        else
-//                        {
-//                            xi = 1.0 - 2 * gaussLeguerreCoords[order][l];
-//                        }
-//                        dU(i, index) +=  - 1 / (2 * M_PI) * log(segment.length()) * shapeFunction(polyOrder, gaussCoords[order][l])(k) *  jac * gaussWeights[order][l] + 1 / (M_PI) * shapeFunction(polyOrder, gaussCoords[order][l])(k) *  jac * gaussWeights[order][l];
+                        double dxdb = 2;
+                        if(m_polyOrder == 0)
+                        {
+                            xi = 1.0;
+                        }
+                        else
+                        {
+                            if(k == 0)
+                            {
+                                xi = 2 * gaussLeguerreCoords[order][l] - 1.0;
+                                dxdb = 2.0;
+                            }
+                            else
+                            {
+                                xi = 1.0 - 2.0 * gaussLeguerreCoords[order][l];
+                                dxdb = 2.0;
+                            }
+                        }
+                        dU(i, index) +=  - 1 / ( 2 * M_PI) * log(segment.length() / 2) * shapeFunction(m_polyOrder, gaussCoords[order][l])(k) *  jac * gaussWeights[order][l] + 1 / (2 * M_PI) * dxdb * shapeFunction(m_polyOrder, xi)(k) *  jac * gaussLeguerreWeights[order][l];
                         dT(i, index) = 0.5;
-                    }   
-                        dU(i, index) += shapeFunction(polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D(node, segment, gaussCoords[order][l]) * jac * gaussWeights[order][l];
-                        dT(i, index) += shapeFunction(polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D_derivation(node, segment, gaussCoords[order][l]) * jac * gaussWeights[order][l];                    
+
+                    } else
+                    {
+                        dU(i, index) += shapeFunction(m_polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D(node, segment, gaussCoords[order][l]) * jac * gaussWeights[order][l];
+                        dT(i, index) += shapeFunction(m_polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D_derivation(node, segment, gaussCoords[order][l]) * jac * gaussWeights[order][l];
+                    }
                 }
             }
         }
     }
 
     BemVector bp(n);
-    //    for(int i = 0; i < n; i++ )
-    //    {
-    //        for(int j = 0; j < mesh.m_elements.count(); j++)
-    //        {
-    //            double R = sqrt((mesh.m_segments[i].gravity().x - mesh.m_elements[j].gravity().x) * (mesh.m_segments[i].gravity().x - mesh.m_elements[j].gravity().x) +
-    //                            (mesh.m_segments[i].gravity().y - mesh.m_elements[j].gravity().y) * (mesh.m_segments[i].gravity().y - mesh.m_elements[j].gravity().y));
-    //            bp(i) += 1/(2 * M_PI) * mesh.m_elements[j].f() * log(R) * mesh.m_elements[j].araea();
-    //        }
-    //    }
+    bp.clear();
+
 
     // Rearranging matrices
     BemMatrix A(n, n);
@@ -442,22 +460,23 @@ void Bem::solve()
             for(int i = 0; i < n; i++)
             {
                 A(i, j) =     dT(i, j);
-                C(i, j) =   - dU(i, j);
+                C(i, j) =     dU(i, j);
             }
-            rsv(j) = mesh.m_nodes[j]->value;
+            rsv(j) = mesh.m_nodes[j]->normalDerivation;
         }
     }
 
     // ToDo: Poisson - right side vector
 
+    qDebug() << dU.toString();
+    qDebug() << dT.toString();
 
     BemVector b(n);
     b = C * rsv + bp;
 
-
     BemVector results(n);
     results = A.solve(b);
-
+    qDebug() << results.toString();
 
     for (int i = 0; i < n; i++)
     {
@@ -474,19 +493,12 @@ void Bem::solve()
 
     for (int i = 0; i < n; i++)
     {
-        qDebug() << mesh.m_nodes[i]->value;
+        qDebug() << mesh.m_nodes[i]->toString();
+        qDebug() << "Value" <<  mesh.m_nodes[i]->value;
         qDebug() << mesh.m_nodes[i]->normalDerivation;
     }
 
     domainSolution();
-
-    //    foreach(Node * node, mesh.m_nodes)
-    //    {
-    //        qDebug() << node->x << node->y;
-    //        qDebug() << node->isEssential;
-    //        qDebug() << node->value;
-    //        qDebug() << node->normalDerivation;
-    //    }
 }
 
 void Bem::domainSolution()
@@ -519,8 +531,7 @@ double Bem::getValue(double x, double y)
 
 double Bem::potential(double x, double y)
 {
-    int polyOrder = 1;
-    int order = 3;
+    int order = 7;
     int n = mesh.m_segments.count();
 
     double u = 0;
@@ -531,17 +542,45 @@ double Bem::potential(double x, double y)
         Segment edge = mesh.m_segments[i];
         if(p.distanceOf(edge.firstNode()) < EPS_ZERO)
         {
+            if(m_polyOrder == 0)
+                return edge.m_points[0]->value;
+
             return edge.firstNode().value;
         }
 
         if(p.distanceOf(edge.lastNode()) < EPS_ZERO)
         {
+            if(m_polyOrder == 0)
+                return edge.m_points[0]->value;
+
             return edge.lastNode().value;
         }
 
+        if(p.distanceOf(edge.gravity()) < EPS_ZERO)
+        {
+            return edge.m_points[0]->value;
+        }
+
+        if(edge.distanceOf(p) < EPS_ZERO)
+        {
+            double xi  = edge.parametricCoordinate(p);
+            double result = 0;
+
+            for(int k = 0; k <= m_polyOrder; k++)
+            {
+                result +=  shapeFunction(m_polyOrder, xi)(k) * edge.m_points[k]->value;
+            }
+            return result;
+        }
+
         QList<Node> nodes;
-        nodes.append(edge.firstNode());
-        nodes.append(edge.lastNode());
+        if(m_polyOrder == 0)
+            nodes.append(* edge.m_points[0]);
+        else
+        {
+            nodes.append(edge.firstNode());
+            nodes.append(edge.lastNode());
+        }
         //        double H = 0;
         //        double G = 0;
         //        Node integ = integral(p, a, b);
@@ -550,21 +589,15 @@ double Bem::potential(double x, double y)
         double dT = 0;
 
         double delta_u = 0;
-        for(int k = 0; k <= polyOrder; k++)
+        for(int k = 0; k <= m_polyOrder; k++)
         {
             for(int l = 0; l <= order; l++)
             {
-                double  jac =jacobian(polyOrder, gaussCoords[order][l], edge);
-                if(edge.isLyingPoint(p))
-                {
-                    dU +=  1 / (2 * M_PI) * (- 2 * log(edge.length()) * shapeFunction(polyOrder, gaussCoords[order][l])(k) *  jac * gaussWeights[order][l] +
-                                             2 * shapeFunction(polyOrder, gaussCoords[order][l])(k) *  jac * gaussWeights[order][l]);
-                    dT = 0.5;
-                }
-                dT += shapeFunction(polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D_derivation(p, edge, gaussCoords[order][l]) * jac * gaussWeights[order][l];
-                dU += shapeFunction(polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D(p, edge, gaussCoords[order][l]) * jac * gaussWeights[order][l];
+                double  jac =jacobian(m_polyOrder, gaussCoords[order][l], edge);
+                dT += shapeFunction(m_polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D_derivation(p, edge, gaussCoords[order][l]) * jac * gaussWeights[order][l];
+                dU += shapeFunction(m_polyOrder, gaussCoords[order][l])(k) * kernel_laplace2D(p, edge, gaussCoords[order][l]) * jac * gaussWeights[order][l];
             }
-            delta_u =  - dT * nodes[k].value +  dU * nodes[k].normalDerivation;
+            delta_u =   - dT * edge.m_points[k]->value + dU * edge.m_points[k]->normalDerivation;
             u = u + delta_u;
             dT = 0;
             dU = 0;
